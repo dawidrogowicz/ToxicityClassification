@@ -4,13 +4,16 @@ import numpy as np
 import pickle
 import os
 import re
+import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
-from sklearn.manifold import TSNE
-from embeddings import train_embeddings, plot_embeddings
+from embeddings import train_embeddings, visualize_embeddings
 from collections import Counter
 
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('wordnet')
 wnl = WordNetLemmatizer()
 
 # CONSTANTS
@@ -22,6 +25,7 @@ DICTIONARIES_PATH = 'pickles/dictionaries.pickle'
 DATA_X_PATH = 'pickles/data_x.pickle'
 EMBEDDINGS_PATH = 'pickles/embeddings.pickle'
 LEXICON_PATH = 'pickles/lexicon.pickle'
+EMBED_DATA_X_PATH = 'pickles/embed_data_x.pickle'
 
 
 # FUNCTIONS
@@ -32,7 +36,7 @@ def token_valid(token):
             and re.match(r'^[a-z]+$', token))
 
 
-def create_lexicon(sentence_list, n_tokens=10000):
+def create_lexicon(sentence_list, n_tokens=1000000):
     _lexicon = list()
     for sentence in tqdm(sentence_list):
         words = word_tokenize(sentence.lower())
@@ -56,7 +60,7 @@ def to_one_hot(sentence, _lexicon):
     return output
 
 
-def create_dictionary(sentences, _lexicon):
+def create_dictionary(_lexicon):
     _dictionary = dict()
     for entry in _lexicon:
         _dictionary[entry] = len(_dictionary) + 1
@@ -90,25 +94,17 @@ def convert_sentences(sentence_list, _dictionary):
     return data
 
 
-# def generate_batch(x, y, batch_size=256):
-#     assert len(x) == len(y)
-#     assert len(np.shape(x)) == 2 and len(np.shape(y)) == 2
-#
-#     data = list()
-#
-#     while len(data) < len(x):
-
-
 # START
 df = pd.read_csv(TRAIN_PATH)
 # limit number of samples until model is ready
-df = df[:10000]
+# df = df[:10000]
 
 data_x = df['comment_text']
 data_y = np.array(df.iloc[:, 2:])
 
 del df
 
+# LEXICON
 # If lexicon file exists, load it
 # else, create new lexicon and save it to the file
 if os.path.exists(LEXICON_PATH):
@@ -121,6 +117,7 @@ else:
         pickle.dump(lexicon, f)
     print('lexicon created')
 
+# DICTIONARIES
 # If dictionaries file exists, load it
 # else, create new dictionaries and save them to the file
 if os.path.exists(DICTIONARIES_PATH):
@@ -128,12 +125,13 @@ if os.path.exists(DICTIONARIES_PATH):
         dictionary, reverse_dictionary = pickle.load(f)
     print('dictionaries loaded')
 else:
-    dictionaries = create_dictionary(data_x, lexicon)
+    dictionaries = create_dictionary(lexicon)
     dictionary, reverse_dictionary = dictionaries
     with open(DICTIONARIES_PATH, 'wb') as f:
         pickle.dump(dictionaries, f)
     print('dictionaries created')
 
+# DATA X RAW
 # If features file exists, load it
 # else, process new features and save it to the file
 if os.path.exists(DATA_X_PATH):
@@ -146,6 +144,22 @@ else:
         pickle.dump(data_x, f)
     print('features processed')
 
+# DATA X FOR EMBEDDINGS
+# If embedding data file exists, load it
+# else, process new embedding data and save it to the file
+if os.path.exists(EMBED_DATA_X_PATH):
+    with open(EMBED_DATA_X_PATH, 'rb') as f:
+        embedding_data = pickle.load(f)
+    print('embedding data loaded')
+else:
+    # flatten and remove neighbour zeros
+    embedding_data = np.reshape(data_x, (-1))
+    embedding_data = [x for i, x in enumerate(embedding_data) if sum(embedding_data[i - 1:i]) > 0]
+    with open(EMBED_DATA_X_PATH, 'wb') as f:
+        pickle.dump(embedding_data, f)
+    print('embedding data created')
+
+# EMBEDDINGS
 # If embeddings file exists, load it
 # else, create new embeddings and save it to the file
 if os.path.exists(EMBEDDINGS_PATH):
@@ -153,28 +167,21 @@ if os.path.exists(EMBEDDINGS_PATH):
         embeddings = pickle.load(f)
     print('embeddings loaded')
 else:
-    vocabulary_size = len(lexicon)
-    lexicon = [dictionary.get(x, 0) for x in lexicon]
-    # flatten and remove neighbour zeros
-    embedding_data = [x for i, x in enumerate(lexicon) if sum(lexicon[i - 1:i]) > 0]
-    embeddings = train_embeddings(embedding_data, vocabulary_size, reverse_dictionary)
+    embeddings = train_embeddings(embedding_data, len(lexicon))
     with open(EMBEDDINGS_PATH, 'wb') as f:
         pickle.dump(embeddings, f)
     print('embeddings processed')
 
+print('Lexicon length: ', len(lexicon))
+embedding_to_visualize = []
+labels = []
+for i, label in enumerate(lexicon):
+    labels.append(label)
+    embedding_to_visualize.append(embeddings[i])
+    if i > 5000:
+        break
 
-tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000, method='exact')
-plot_only = 400
-embeddings_2d = tsne.fit_transform(embeddings[:plot_only, :])
-labels = [reverse_dictionary.get(i, 0) for i in range(1, plot_only + 1)]
-
-plot_embeddings(embeddings_2d, labels, 'plot2d.png')
-
-# train_x, test_x, train_y, test_y = train_test_split(data_x, data_y, test_size=.3, random_state=1)
-# length = len(lexicon)
-#
-# model = model((None, length))
-# model.fit(train_x, train_y, 10)
-#
-# acc = model.evaluate(test_x, test_y)
-# print(acc)
+embedding_to_visualize = np.array(embedding_to_visualize)
+visualize_embeddings(embedding_to_visualize, labels)
+print('embeddings visualised in tensorboard')
+os.system('tensorboard --logdir=C:\dev\ToxicityClassification\log')
