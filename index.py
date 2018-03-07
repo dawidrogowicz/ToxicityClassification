@@ -36,7 +36,7 @@ def token_valid(token):
             and re.match(r'^[a-z]+$', token))
 
 
-def create_lexicon(sentence_list, n_tokens=1000000):
+def create_lexicon(sentence_list, n_tokens=10000):
     _lexicon = list()
     for sentence in tqdm(sentence_list):
         words = word_tokenize(sentence.lower())
@@ -44,7 +44,7 @@ def create_lexicon(sentence_list, n_tokens=1000000):
         _lexicon.extend(words)
 
     # use only n most common words
-    _lexicon = [count[0] for count in Counter(_lexicon).most_common(n_tokens)]
+    _lexicon = ['UNKNOWN'] + [count[0] for count in Counter(_lexicon).most_common(n_tokens - 1)]
     return _lexicon
 
 
@@ -63,7 +63,7 @@ def to_one_hot(sentence, _lexicon):
 def create_dictionary(_lexicon):
     _dictionary = dict()
     for entry in _lexicon:
-        _dictionary[entry] = len(_dictionary) + 1
+        _dictionary[entry] = len(_dictionary)
     _reverse_dictionary = dict(zip(_dictionary.values(), _dictionary.keys()))
     return _dictionary, _reverse_dictionary
 
@@ -117,6 +117,8 @@ else:
         pickle.dump(lexicon, f)
     print('lexicon created')
 
+
+print('LEX: ', lexicon[:5])
 # DICTIONARIES
 # If dictionaries file exists, load it
 # else, create new dictionaries and save them to the file
@@ -178,7 +180,7 @@ labels = []
 for i, label in enumerate(lexicon):
     labels.append(label)
     embedding_to_visualize.append(embeddings[i])
-    if i > 5000:
+    if i > 8000:
         break
 
 embedding_to_visualize = np.array(embedding_to_visualize)

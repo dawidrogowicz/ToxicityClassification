@@ -11,11 +11,11 @@ import math
 import os
 
 data_index = 0
-batch_size = 128
-embedding_size = 160
-skip_window = 2
-num_skips = 4
-num_sampled = 64
+batch_size = 256
+embedding_size = 200
+skip_window = 4
+num_skips = 8
+num_sampled = 32
 
 
 def model(shape):
@@ -94,7 +94,7 @@ def train_embeddings(data, vocabulary_size):
 
         init = tf.global_variables_initializer()
 
-    num_steps = 160001
+    num_steps = 300001
 
     with tf.Session(graph=graph) as sess:
         init.run()
