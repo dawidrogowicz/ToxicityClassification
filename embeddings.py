@@ -9,10 +9,11 @@ import collections
 import random
 import math
 import os
+import uuid
 
 data_index = 0
 batch_size = 256
-embedding_size = 200
+embedding_size = 128
 skip_window = 4
 num_skips = 8
 num_sampled = 32
@@ -27,7 +28,7 @@ def model(shape):
     return DNN(net, tensorboard_dir='log')
 
 
-def generate_batch(data, batch_size, num_skips, skip_window):
+def generate_batch(data):
     global data_index
     assert batch_size % num_skips == 0
     assert num_skips <= 2 * skip_window
@@ -64,6 +65,8 @@ def generate_batch(data, batch_size, num_skips, skip_window):
 
 def train_embeddings(data, vocabulary_size):
     graph = tf.Graph()
+    run_id = uuid.uuid4().hex
+    print('Creating graph ', run_id)
 
     with graph.as_default():
         train_inputs = tf.placeholder(tf.int32, [batch_size])
@@ -87,14 +90,24 @@ def train_embeddings(data, vocabulary_size):
                 num_sampled=num_sampled,
                 num_classes=vocabulary_size))
 
-        optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
+        tf.summary.scalar('loss', loss)
+
+        global_step = tf.Variable(0, False)
+        lr = tf.train.exponential_decay(1.0, global_step, 100000, .96, staircase=True)
+
+        tf.summary.scalar('learning rate', lr)
+
+        optimizer = tf.train.GradientDescentOptimizer(lr).minimize(loss, global_step=global_step)
 
         norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
-        normalized_embeddings = embeddings / norm
+        normalized_embeddings = tf.div(embeddings, norm)
+
+        merged = tf.summary.merge_all()
+        writer = tf.summary.FileWriter(os.path.join('log', run_id), graph)
 
         init = tf.global_variables_initializer()
 
-    num_steps = 300001
+    num_steps = 400001
 
     with tf.Session(graph=graph) as sess:
         init.run()
@@ -103,11 +116,13 @@ def train_embeddings(data, vocabulary_size):
         average_loss = 0
 
         for step in range(num_steps):
-            batch_inputs, batch_labels = generate_batch(data, batch_size, num_skips, skip_window)
+            batch_inputs, batch_labels = generate_batch(data)
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
-            _, loss_val = sess.run((optimizer, loss), feed_dict)
+            _, loss_val, summary = sess.run((optimizer, loss, merged), feed_dict)
             average_loss += loss_val
+
+            writer.add_summary(summary, step)
 
             if step % 1000 == 0:
                 if step > 0:

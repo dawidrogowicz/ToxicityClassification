@@ -3,6 +3,7 @@ from tqdm import tqdm
 import numpy as np
 import pickle
 import os
+import sys
 import re
 import nltk
 from nltk.stem import WordNetLemmatizer
@@ -29,6 +30,27 @@ EMBED_DATA_X_PATH = 'pickles/embed_data_x.pickle'
 
 
 # FUNCTIONS
+def main(argv=sys.argv):
+    if argv[1] == 'rm':
+        for arg in argv[2:]:
+            del_dir(arg)
+
+
+def del_dir(dirname):
+    for subdir in os.listdir(dirname):
+        subpath = os.path.join(dirname, subdir)
+
+        if os.path.isfile(subpath):
+            try:
+                os.unlink(subpath)
+            except Exception as e:
+                print('Could not delete file ', subpath)
+                print(e)
+        else:
+            del_dir(subpath)
+            os.rmdir(subpath)
+
+
 def token_valid(token):
     return ((token not in STOP_WORDS)
             and (len(token) > 2)
@@ -36,13 +58,14 @@ def token_valid(token):
             and re.match(r'^[a-z]+$', token))
 
 
-def create_lexicon(sentence_list, n_tokens=10000):
+def create_lexicon(sentence_list, n_tokens=40000):
     _lexicon = list()
     for sentence in tqdm(sentence_list):
         words = word_tokenize(sentence.lower())
         words = [wnl.lemmatize(token) for token in words if token_valid(token)]
         _lexicon.extend(words)
 
+    print('Unique words: ', len(set(_lexicon)))
     # use only n most common words
     _lexicon = ['UNKNOWN'] + [count[0] for count in Counter(_lexicon).most_common(n_tokens - 1)]
     return _lexicon
@@ -95,6 +118,11 @@ def convert_sentences(sentence_list, _dictionary):
 
 
 # START
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        sys.exit(main())
+
 df = pd.read_csv(TRAIN_PATH)
 # limit number of samples until model is ready
 # df = df[:10000]
@@ -118,7 +146,7 @@ else:
     print('lexicon created')
 
 
-print('LEX: ', lexicon[:5])
+print('lexicon: ', lexicon[:5])
 # DICTIONARIES
 # If dictionaries file exists, load it
 # else, create new dictionaries and save them to the file
@@ -156,7 +184,7 @@ if os.path.exists(EMBED_DATA_X_PATH):
 else:
     # flatten and remove neighbour zeros
     embedding_data = np.reshape(data_x, (-1))
-    embedding_data = [x for i, x in enumerate(embedding_data) if sum(embedding_data[i - 1:i]) > 0]
+    embedding_data = [x for i, x in enumerate(tqdm(embedding_data)) if sum(embedding_data[i - 1:i]) > 0]
     with open(EMBED_DATA_X_PATH, 'wb') as f:
         pickle.dump(embedding_data, f)
     print('embedding data created')
