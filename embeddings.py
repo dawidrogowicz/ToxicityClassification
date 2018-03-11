@@ -1,7 +1,3 @@
-from tflearn.layers.core import input_data, fully_connected
-from tflearn.layers.recurrent import lstm
-from tflearn import regression
-from tflearn.models import DNN
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
 import numpy as np
@@ -17,15 +13,6 @@ embedding_size = 128
 skip_window = 4
 num_skips = 8
 num_sampled = 32
-
-
-def model(shape):
-    net = input_data(shape)
-    net = lstm(net, 128)
-    net = fully_connected(net, 6)
-    net = regression(net)
-
-    return DNN(net, tensorboard_dir='log')
 
 
 def generate_batch(data):
@@ -63,7 +50,7 @@ def generate_batch(data):
     return batch, labels
 
 
-def train_embeddings(data, vocabulary_size):
+def train_embeddings(data, vocabulary_size, n_steps=400000):
     graph = tf.Graph()
     run_id = uuid.uuid4().hex
     print('Creating graph ', run_id)
@@ -90,12 +77,12 @@ def train_embeddings(data, vocabulary_size):
                 num_sampled=num_sampled,
                 num_classes=vocabulary_size))
 
-        tf.summary.scalar('loss', loss)
+        tf.summary.scalar('embeddings loss', loss)
 
         global_step = tf.Variable(0, False)
         lr = tf.train.exponential_decay(1.0, global_step, 100000, .96, staircase=True)
 
-        tf.summary.scalar('learning rate', lr)
+        tf.summary.scalar('embeddings learning rate', lr)
 
         optimizer = tf.train.GradientDescentOptimizer(lr).minimize(loss, global_step=global_step)
 
@@ -103,11 +90,9 @@ def train_embeddings(data, vocabulary_size):
         normalized_embeddings = tf.div(embeddings, norm)
 
         merged = tf.summary.merge_all()
-        writer = tf.summary.FileWriter(os.path.join('log', run_id), graph)
+        writer = tf.summary.FileWriter(os.path.join('log', 'embeddings', run_id), graph)
 
         init = tf.global_variables_initializer()
-
-    num_steps = 400001
 
     with tf.Session(graph=graph) as sess:
         init.run()
@@ -115,7 +100,7 @@ def train_embeddings(data, vocabulary_size):
 
         average_loss = 0
 
-        for step in range(num_steps):
+        for step in range(n_steps):
             batch_inputs, batch_labels = generate_batch(data)
             feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
@@ -124,7 +109,7 @@ def train_embeddings(data, vocabulary_size):
 
             writer.add_summary(summary, step)
 
-            if step % 1000 == 0:
+            if step % 5000 == 0:
                 if step > 0:
                     average_loss /= 2000
 
@@ -134,10 +119,21 @@ def train_embeddings(data, vocabulary_size):
         return normalized_embeddings.eval()
 
 
-def visualize_embeddings(embeds, labels):
-    embeddings = tf.Variable(embeds, name='embeddings')
-    meta_path = os.path.join('log', 'metadata.tsv')
-    embeddings_path = os.path.join('log', 'embeddings.ckpt')
+def visualize_embeddings(lexicon, embed_lookup):
+    embeds = []
+    labels = []
+    for i, label in enumerate(lexicon):
+        labels.append(label)
+        embeds.append(embed_lookup[i])
+        if i > 5000:
+            break
+
+    if not os.path.exists(os.path.join('log', 'projector')):
+        os.makedirs(os.path.join('log', 'projector'))
+
+    embeddings = tf.Variable(np.array(embeds), name='embeddings')
+    meta_path = os.path.join('log', 'projector', 'metadata.tsv')
+    embeddings_path = os.path.join('log', 'projector', 'embeddings.ckpt')
 
     with open(meta_path, 'w') as f:
         for label in labels:
@@ -148,10 +144,12 @@ def visualize_embeddings(embeds, labels):
         sess.run(embeddings.initializer)
         saver.save(sess, embeddings_path)
 
-        writer = tf.summary.FileWriter('log')
+        writer = tf.summary.FileWriter(os.path.join('log', 'projector'))
         config = projector.ProjectorConfig()
 
         embed = config.embeddings.add()
         embed.tensor_name = embeddings.name
         embed.metadata_path = 'metadata.tsv'
         projector.visualize_embeddings(writer, config)
+
+    print('embeddings visualised in tensorboard')

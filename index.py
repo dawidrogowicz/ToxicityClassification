@@ -6,10 +6,12 @@ import os
 import sys
 import re
 import nltk
+from sklearn.model_selection import train_test_split
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from embeddings import train_embeddings, visualize_embeddings
+from model import train_model, test_model
 from collections import Counter
 
 nltk.download('stopwords')
@@ -26,7 +28,8 @@ DICTIONARIES_PATH = 'pickles/dictionaries.pickle'
 DATA_X_PATH = 'pickles/data_x.pickle'
 EMBEDDINGS_PATH = 'pickles/embeddings.pickle'
 LEXICON_PATH = 'pickles/lexicon.pickle'
-EMBED_DATA_X_PATH = 'pickles/embed_data_x.pickle'
+EMBED_TRAIN_PATH = 'pickles/embed_train_x.pickle'
+EMBED_DATA_X_PATH = 'pickles/embedded_data_x.pickle'
 
 
 # FUNCTIONS
@@ -114,7 +117,7 @@ def convert_sentences(sentence_list, _dictionary):
                    'constant',
                    constant_values=(0, 0)) for tokens in data]
 
-    return data
+    return np.array(data, dtype=np.int32)
 
 
 # START
@@ -125,7 +128,7 @@ if __name__ == '__main__':
 
 df = pd.read_csv(TRAIN_PATH)
 # limit number of samples until model is ready
-# df = df[:10000]
+# df = df[:1000]
 
 data_x = df['comment_text']
 data_y = np.array(df.iloc[:, 2:])
@@ -175,18 +178,18 @@ else:
     print('features processed')
 
 # DATA X FOR EMBEDDINGS
-# If embedding data file exists, load it
-# else, process new embedding data and save it to the file
-if os.path.exists(EMBED_DATA_X_PATH):
-    with open(EMBED_DATA_X_PATH, 'rb') as f:
-        embedding_data = pickle.load(f)
+# If embedding train data file exists, load it
+# else, process new embedding train data and save it to the file
+if os.path.exists(EMBED_TRAIN_PATH):
+    with open(EMBED_TRAIN_PATH, 'rb') as f:
+        embed_train_x = pickle.load(f)
     print('embedding data loaded')
 else:
     # flatten and remove neighbour zeros
-    embedding_data = np.reshape(data_x, (-1))
-    embedding_data = [x for i, x in enumerate(tqdm(embedding_data)) if sum(embedding_data[i - 1:i]) > 0]
-    with open(EMBED_DATA_X_PATH, 'wb') as f:
-        pickle.dump(embedding_data, f)
+    embed_train_x = np.reshape(data_x, (-1))
+    embed_train_x = [x for i, x in enumerate(tqdm(embed_train_x)) if sum(embed_train_x[i - 1:i]) > 0]
+    with open(EMBED_TRAIN_PATH, 'wb') as f:
+        pickle.dump(embed_train_x, f)
     print('embedding data created')
 
 # EMBEDDINGS
@@ -197,21 +200,15 @@ if os.path.exists(EMBEDDINGS_PATH):
         embeddings = pickle.load(f)
     print('embeddings loaded')
 else:
-    embeddings = train_embeddings(embedding_data, len(lexicon))
+    embeddings = train_embeddings(embed_train_x, len(lexicon))
     with open(EMBEDDINGS_PATH, 'wb') as f:
         pickle.dump(embeddings, f)
     print('embeddings processed')
 
-print('Lexicon length: ', len(lexicon))
-embedding_to_visualize = []
-labels = []
-for i, label in enumerate(lexicon):
-    labels.append(label)
-    embedding_to_visualize.append(embeddings[i])
-    if i > 8000:
-        break
+# Embeddings visualisation
+visualize_embeddings(lexicon, embeddings)
 
-embedding_to_visualize = np.array(embedding_to_visualize)
-visualize_embeddings(embedding_to_visualize, labels)
-print('embeddings visualised in tensorboard')
-os.system('tensorboard --logdir=C:\dev\ToxicityClassification\log')
+train_x, test_x, train_y, test_y = train_test_split(data_x, data_y, test_size=.2)
+
+train_model(train_x, train_y, embeddings)
+test_model(test_x, test_y, embeddings)
