@@ -1,5 +1,6 @@
 import uuid
 import os
+import time
 import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
@@ -18,7 +19,14 @@ def generate_batch(x, y, data_index, batch_size=128):
     return batch, labels
 
 
-def train_model(x, y, embeddings, batch_size=128, epochs=10, lstm_size=64, model_path=os.path.join('model', 'model.ckpt')):
+def get_cell(cell_size):
+    cell = tf.nn.rnn_cell.GRUCell(cell_size)
+    return tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=.8)
+
+
+
+def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
+                model_path=os.path.join('model', 'model.ckpt')):
     graph = tf.Graph()
     run_id = uuid.uuid4().hex
     print('Creating graph ', run_id)
@@ -30,18 +38,24 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, lstm_size=64, model
         inputs = tf.placeholder(tf.int32, (None, sent_len))
         labels = tf.placeholder(tf.int32, (None, n_classes))
 
-        weights = tf.Variable(tf.truncated_normal((lstm_size, n_classes)))
-        biases = tf.Variable(tf.truncated_normal([n_classes]))
+        # weights = tf.Variable(tf.truncated_normal((cell_size * 2, n_classes)))
+        # biases = tf.Variable(tf.truncated_normal([n_classes]))
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
-        lstm = tf.nn.rnn_cell.BasicLSTMCell(lstm_size)
+        cell = get_cell(cell_size)
 
-        outputs, _ = tf.nn.dynamic_rnn(lstm, data, dtype=tf.float32)
-        outputs = tf.transpose(outputs, (1, 0, 2))
-        outputs = tf.gather(outputs, int(outputs.get_shape()[0]) - 1)
+        rnn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell, data, dtype=tf.float32)
+        rnn = tf.concat(rnn, -1)
+        # rnn = tf.transpose(rnn, (1, 0, 2))
+        # rnn = tf.gather(rnn, int(rnn.get_shape()[0]) - 1)
+        # rnn = tf.matmul(rnn, weights) + biases
 
-        logits = tf.matmul(outputs, weights) + biases
+        avg_pool = tf.keras.layers.GlobalAvgPool1D()(rnn)
+        max_pool = tf.keras.layers.GlobalMaxPool1D()(rnn)
+        pool = tf.concat([avg_pool, max_pool], -1)
+
+        logits = tf.contrib.layers.fully_connected(pool, n_classes)
 
         correct = tf.equal(tf.cast(tf.round(logits), dtype=tf.int32), labels)
         accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
@@ -64,24 +78,36 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, lstm_size=64, model
 
         if os.path.exists('model'):
             saver.restore(sess, model_path)
-            print('Model restored from ', model_path, '\nContinuing at epoch ', current_epoch.eval())
+            print('Model restored from ', model_path,
+                  '\nContinuing at epoch ', current_epoch.eval())
 
         print('Training...')
         for epoch in range(current_epoch.eval(), epochs):
+            t_start = time.time()
             for data_index in range(len(y)):
                 batch_x, batch_y = generate_batch(x, y, data_index, batch_size)
 
-                _, loss_val, summary = sess.run((optimizer, loss, merged), {inputs: batch_x, labels: batch_y})
+                _, loss_val, summary = sess.run((optimizer, loss, merged),
+                                                {inputs: batch_x, labels: batch_y})
                 writer.add_summary(summary)
 
                 if data_index % 500 == 0:
-                    print('Epoch: ', epoch, '    Step: ', data_index, '/', len(y), '\nLoss: ', loss_val)
+                    current_time = time.time() - t_start
+                    avg_loop_time = current_time / (data_index + 1)
+                    loops_left = len(y) - data_index - 1
+                    time_left = int(avg_loop_time * loops_left)
+                    time_left = '{}h:{}m:{}s'.format(time_left // 3600,
+                                                     time_left % 3600 // 60, time_left % 3600 % 60)
+                    print('Epoch: {}    Step: {}/{}\nLoss: {}    Time left: {}'
+                          .format(epoch, data_index, len(y), loss_val, time_left))
+
             current_epoch.load(epoch + 1, sess)
             saver.save(sess, model_path)
             print('Model saved in ', model_path, ' after epoch ', epoch)
 
 
-def test_model(x, y, embeddings, batch_size=128, lstm_size=64, model_path=os.path.join('model', 'model.ckpt')):
+def test_model(x, y, embeddings, batch_size=128, cell_size=64,
+               model_path=os.path.join('model', 'model.ckpt')):
     assert os.path.exists('model')
 
     graph = tf.Graph()
@@ -92,12 +118,12 @@ def test_model(x, y, embeddings, batch_size=128, lstm_size=64, model_path=os.pat
         inputs = tf.placeholder(tf.int32, (None, sent_len))
         labels = tf.placeholder(tf.int32, (None, n_classes))
 
-        weights = tf.Variable(tf.truncated_normal((lstm_size, n_classes)))
+        weights = tf.Variable(tf.truncated_normal((cell_size, n_classes)))
         biases = tf.Variable(tf.truncated_normal([n_classes]))
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
-        lstm = tf.nn.rnn_cell.BasicLSTMCell(lstm_size)
+        lstm = tf.nn.rnn_cell.BasicLSTMCell(cell_size)
 
         outputs, _ = tf.nn.dynamic_rnn(lstm, data, dtype=tf.float32)
         outputs = tf.transpose(outputs, (1, 0, 2))
