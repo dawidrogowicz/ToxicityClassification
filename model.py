@@ -6,10 +6,10 @@ import numpy as np
 from tqdm import tqdm
 
 
-def generate_batch(x, y, data_index, batch_size=128):
+def generate_batch(x, y, step, batch_size=128):
     assert len(x) == len(y)
 
-    first_index = data_index
+    first_index = step * batch_size
     data_index = first_index + batch_size
     last_index = len(y) if data_index > len(y) else data_index
 
@@ -25,7 +25,7 @@ def get_cell(cell_size):
 
 
 
-def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
+def train_model(x, y, embeddings, batch_size=128, epochs=1, cell_size=128,
                 model_path=os.path.join('model', 'model.ckpt')):
     graph = tf.Graph()
     run_id = uuid.uuid4().hex
@@ -37,9 +37,7 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
     with graph.as_default():
         inputs = tf.placeholder(tf.int32, (None, sent_len))
         labels = tf.placeholder(tf.int32, (None, n_classes))
-
-        # weights = tf.Variable(tf.truncated_normal((cell_size * 2, n_classes)))
-        # biases = tf.Variable(tf.truncated_normal([n_classes]))
+        labels = tf.cast(labels, tf.float32)
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
@@ -47,9 +45,6 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
 
         rnn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell, data, dtype=tf.float32)
         rnn = tf.concat(rnn, -1)
-        # rnn = tf.transpose(rnn, (1, 0, 2))
-        # rnn = tf.gather(rnn, int(rnn.get_shape()[0]) - 1)
-        # rnn = tf.matmul(rnn, weights) + biases
 
         avg_pool = tf.keras.layers.GlobalAvgPool1D()(rnn)
         max_pool = tf.keras.layers.GlobalMaxPool1D()(rnn)
@@ -57,8 +52,9 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
 
         logits = tf.contrib.layers.fully_connected(pool, n_classes)
 
-        correct = tf.equal(tf.cast(tf.round(logits), dtype=tf.int32), labels)
-        accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
+        correct = tf.equal(tf.round(logits), labels)
+        accuracy = tf.reduce_mean(tf.cast(tf.reduce_all(correct, -1), dtype=tf.float32))
+
         tf.summary.scalar('accuracy', accuracy)
 
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels))
@@ -76,39 +72,44 @@ def train_model(x, y, embeddings, batch_size=128, epochs=10, cell_size=128,
         init.run()
         saver = tf.train.Saver()
 
-        if os.path.exists('model'):
+        if os.path.exists('model') and os.listdir('model'):
             saver.restore(sess, model_path)
             print('Model restored from ', model_path,
                   '\nContinuing at epoch ', current_epoch.eval())
 
+        n_steps = len(y) // batch_size + 1
+
         print('Training...')
         for epoch in range(current_epoch.eval(), epochs):
             t_start = time.time()
-            for data_index in range(len(y)):
-                batch_x, batch_y = generate_batch(x, y, data_index, batch_size)
 
-                _, loss_val, summary = sess.run((optimizer, loss, merged),
-                                                {inputs: batch_x, labels: batch_y})
-                writer.add_summary(summary)
+            for step in range(n_steps):
+                batch_x, batch_y = generate_batch(x, y, step, batch_size)
+                feed_dict = {inputs: batch_x, labels: batch_y}
 
-                if data_index % 500 == 0:
+                _, loss_val = sess.run((optimizer, loss), feed_dict)
+
+                if step % 64 == 0:
+                    acc, summary = sess.run((accuracy, merged), feed_dict)
+                    writer.add_summary(summary, epoch * n_steps + step)
+
                     current_time = time.time() - t_start
-                    avg_loop_time = current_time / (data_index + 1)
-                    loops_left = len(y) - data_index - 1
+                    avg_loop_time = current_time / (step + 1)
+                    loops_left = n_steps - step - 1
                     time_left = int(avg_loop_time * loops_left)
                     time_left = '{}h:{}m:{}s'.format(time_left // 3600,
                                                      time_left % 3600 // 60, time_left % 3600 % 60)
-                    print('Epoch: {}    Step: {}/{}\nLoss: {}    Time left: {}'
-                          .format(epoch, data_index, len(y), loss_val, time_left))
+                    print('Epoch: {}    Step: {}/{}    Time left: {}\nLoss: {}    Accuracy: {}'
+                          .format(epoch, step, n_steps, time_left, loss_val, acc))
 
             current_epoch.load(epoch + 1, sess)
             saver.save(sess, model_path)
             print('Model saved in ', model_path, ' after epoch ', epoch)
 
 
-def test_model(x, y, embeddings, batch_size=128, cell_size=64,
+def test_model(x, y, embeddings, batch_size=128, cell_size=128,
                model_path=os.path.join('model', 'model.ckpt')):
-    assert os.path.exists('model')
+    assert os.path.exists('model') and os.listdir('model')
 
     graph = tf.Graph()
     sent_len = np.shape(x)[1]
@@ -117,22 +118,23 @@ def test_model(x, y, embeddings, batch_size=128, cell_size=64,
     with graph.as_default():
         inputs = tf.placeholder(tf.int32, (None, sent_len))
         labels = tf.placeholder(tf.int32, (None, n_classes))
-
-        weights = tf.Variable(tf.truncated_normal((cell_size, n_classes)))
-        biases = tf.Variable(tf.truncated_normal([n_classes]))
+        labels = tf.cast(labels, tf.float32)
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
-        lstm = tf.nn.rnn_cell.BasicLSTMCell(cell_size)
+        cell = get_cell(cell_size)
 
-        outputs, _ = tf.nn.dynamic_rnn(lstm, data, dtype=tf.float32)
-        outputs = tf.transpose(outputs, (1, 0, 2))
-        outputs = tf.gather(outputs, int(outputs.get_shape()[0]) - 1)
+        rnn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell, data, dtype=tf.float32)
+        rnn = tf.concat(rnn, -1)
 
-        logits = tf.matmul(outputs, weights) + biases
+        avg_pool = tf.keras.layers.GlobalAvgPool1D()(rnn)
+        max_pool = tf.keras.layers.GlobalMaxPool1D()(rnn)
+        pool = tf.concat([avg_pool, max_pool], -1)
 
-        correct = tf.equal(tf.cast(tf.round(logits), dtype=tf.int32), labels)
-        accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
+        logits = tf.contrib.layers.fully_connected(pool, n_classes)
+
+        correct = tf.equal(tf.round(logits), labels)
+        accuracy = tf.reduce_mean(tf.cast(tf.reduce_all(correct, -1), dtype=tf.float32))
 
         init = tf.global_variables_initializer()
 
@@ -144,10 +146,17 @@ def test_model(x, y, embeddings, batch_size=128, cell_size=64,
         print('Testing model restored from ', model_path)
 
         accuracies = []
-        for data_index in tqdm(range(len(y))):
-            batch_x, batch_y = generate_batch(x, y, data_index, batch_size)
+        for step in tqdm(range(len(y) // batch_size + 1)):
+            batch_x, batch_y = generate_batch(x, y, step, batch_size)
+            feed_dict = {inputs: batch_x, labels: batch_y}
 
-            accuracy_val = sess.run(accuracy, {inputs: batch_x, labels: batch_y})
+            logits_val, corr, acc = sess.run((logits, correct, accuracy), feed_dict)
+            if step % 64 == 0:
+                for i in range(5):
+                    print(logits_val[i], '   ', batch_y[i], ' => ', corr[i])
+                print(acc)
+
+            accuracy_val = sess.run(accuracy, feed_dict)
             accuracies.append(accuracy_val)
 
         avg_acc = np.mean(accuracies)
