@@ -5,6 +5,9 @@ import tensorflow as tf
 import numpy as np
 from tqdm import tqdm
 
+cell_size = 256
+batch_size = 128
+model_path = os.path.join('model', 'model.ckpt')
 
 def generate_batch(x, y, step, batch_size=128):
     assert len(x) == len(y)
@@ -19,14 +22,11 @@ def generate_batch(x, y, step, batch_size=128):
     return batch, labels
 
 
-def get_cell(cell_size):
+def get_cell():
     cell = tf.nn.rnn_cell.GRUCell(cell_size)
     return tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=.8)
 
-
-
-def train_model(x, y, embeddings, batch_size=128, epochs=1, cell_size=128,
-                model_path=os.path.join('model', 'model.ckpt')):
+def train_model(x, y, embeddings, epochs=10):
     graph = tf.Graph()
     run_id = uuid.uuid4().hex
     print('Creating graph ', run_id)
@@ -41,23 +41,23 @@ def train_model(x, y, embeddings, batch_size=128, epochs=1, cell_size=128,
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
-        cell = get_cell(cell_size)
-
-        rnn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell, data, dtype=tf.float32)
+        rnn, _ = tf.nn.bidirectional_dynamic_rnn(get_cell(), get_cell(), data, dtype=tf.float32)
         rnn = tf.concat(rnn, -1)
 
-        avg_pool = tf.keras.layers.GlobalAvgPool1D()(rnn)
-        max_pool = tf.keras.layers.GlobalMaxPool1D()(rnn)
-        pool = tf.concat([avg_pool, max_pool], -1)
+        max_pool = tf.layers.max_pooling1d(rnn, sent_len, sent_len)
+        max_pool = tf.squeeze(max_pool, [1])
 
-        logits = tf.contrib.layers.fully_connected(pool, n_classes)
+        dropout = tf.layers.dropout(max_pool, .9)
 
-        correct = tf.equal(tf.round(logits), labels)
+        logits = tf.contrib.layers.fully_connected(dropout, n_classes,
+                                                   activation_fn=None)
+        correct = tf.equal(tf.round(tf.sigmoid(logits)), labels)
         accuracy = tf.reduce_mean(tf.cast(tf.reduce_all(correct, -1), dtype=tf.float32))
 
         tf.summary.scalar('accuracy', accuracy)
 
-        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels))
+        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=logits, labels=labels))
         tf.summary.scalar('loss', loss)
         optimizer = tf.train.AdamOptimizer().minimize(loss)
 
@@ -79,7 +79,7 @@ def train_model(x, y, embeddings, batch_size=128, epochs=1, cell_size=128,
 
         n_steps = len(y) // batch_size + 1
 
-        print('Training...')
+        print('Training ', run_id, '...')
         for epoch in range(current_epoch.eval(), epochs):
             t_start = time.time()
 
@@ -107,8 +107,7 @@ def train_model(x, y, embeddings, batch_size=128, epochs=1, cell_size=128,
             print('Model saved in ', model_path, ' after epoch ', epoch)
 
 
-def test_model(x, y, embeddings, batch_size=128, cell_size=128,
-               model_path=os.path.join('model', 'model.ckpt')):
+def test_model(x, y, embeddings):
     assert os.path.exists('model') and os.listdir('model')
 
     graph = tf.Graph()
@@ -122,17 +121,16 @@ def test_model(x, y, embeddings, batch_size=128, cell_size=128,
 
         data = tf.nn.embedding_lookup(embeddings, inputs)
 
-        cell = get_cell(cell_size)
-
-        rnn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell, data, dtype=tf.float32)
+        rnn, _ = tf.nn.bidirectional_dynamic_rnn(get_cell(), get_cell(), data, dtype=tf.float32)
         rnn = tf.concat(rnn, -1)
 
-        avg_pool = tf.keras.layers.GlobalAvgPool1D()(rnn)
-        max_pool = tf.keras.layers.GlobalMaxPool1D()(rnn)
-        pool = tf.concat([avg_pool, max_pool], -1)
+        max_pool = tf.layers.max_pooling1d(rnn, sent_len, sent_len)
+        max_pool = tf.squeeze(max_pool, [1])
 
-        logits = tf.contrib.layers.fully_connected(pool, n_classes)
+        dropout = tf.layers.dropout(max_pool, .9)
 
+        logits = tf.contrib.layers.fully_connected(dropout, n_classes,
+                                                   activation_fn=tf.sigmoid)
         correct = tf.equal(tf.round(logits), labels)
         accuracy = tf.reduce_mean(tf.cast(tf.reduce_all(correct, -1), dtype=tf.float32))
 
@@ -145,19 +143,24 @@ def test_model(x, y, embeddings, batch_size=128, cell_size=128,
         saver.restore(sess, model_path)
         print('Testing model restored from ', model_path)
 
+        false_logits = []
         accuracies = []
-        for step in tqdm(range(len(y) // batch_size + 1)):
+        for step in range(len(y) // batch_size + 1):
             batch_x, batch_y = generate_batch(x, y, step, batch_size)
             feed_dict = {inputs: batch_x, labels: batch_y}
 
-            logits_val, corr, acc = sess.run((logits, correct, accuracy), feed_dict)
-            if step % 64 == 0:
-                for i in range(5):
-                    print(logits_val[i], '   ', batch_y[i], ' => ', corr[i])
-                print(acc)
+            logits_val, corr = sess.run((logits, correct), feed_dict)
+            if step % 16 == 0:
+                for i in range(15):
+                    for j, logit_correct in enumerate(corr[i]):
+                        if not logit_correct:
+                            false_logits.append(batch_y[i][j])
+                            print(['{:.1f}'.format(x) for x in logits_val[i]], '    ',
+                                  batch_y[i], ' => ', corr[i])
 
             accuracy_val = sess.run(accuracy, feed_dict)
             accuracies.append(accuracy_val)
 
         avg_acc = np.mean(accuracies)
-        print('Average accuracy: ', avg_acc)
+        print('Average accuracy: ', avg_acc, 'FP/FN: ', np.mean(false_logits))
+

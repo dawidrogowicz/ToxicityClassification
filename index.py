@@ -3,9 +3,11 @@ from tqdm import tqdm
 import numpy as np
 import pickle
 import os
+import random
 import sys
 import re
 import nltk
+import collections
 from sklearn.model_selection import train_test_split
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -61,7 +63,7 @@ def token_valid(token):
             and re.match(r'^[a-z]+$', token))
 
 
-def create_lexicon(sentence_list, n_tokens=40000):
+def create_lexicon(sentence_list, n_tokens=20000):
     _lexicon = list()
     for sentence in tqdm(sentence_list):
         words = word_tokenize(sentence.lower())
@@ -96,7 +98,7 @@ def create_dictionary(_lexicon):
 
 def convert_sentences(sentence_list, _dictionary):
     data = list()
-    max_len = 0
+    max_len = 100
     for sentence in tqdm(sentence_list):
         words = word_tokenize(sentence.lower())
         words = [_dictionary.get(wnl.lemmatize(token), 0) for token in words if token_valid(token)]
@@ -108,7 +110,7 @@ def convert_sentences(sentence_list, _dictionary):
                 words = [0]
             words = list(map(int, words))
             if max_len < len(words):
-                max_len = len(words)
+                words = words[:max_len]
 
         data.append(words)
 
@@ -208,7 +210,29 @@ else:
 # Embeddings visualisation
 visualize_embeddings(lexicon, embeddings)
 
-train_x, test_x, train_y, test_y = train_test_split(data_x, data_y, test_size=.2)
+train_x, test_x, train_y, test_y = train_test_split(data_x, data_y,
+        test_size=.1)
 
-train_model(train_x, train_y, embeddings)
+t_x = collections.deque(maxlen=len(train_y))
+t_y = collections.deque(maxlen=len(train_y))
+
+for i, y in enumerate(train_y):
+    if np.any(y) or random.randrange(100) < 15:
+        t_x.appendleft(train_x[i])
+        t_y.appendleft(y)
+    # else:
+        # t_x.append(train_x[i])
+        # t_y.append(y)
+
+t_x = np.array(t_x)
+t_y = np.array(t_y)
+
+for i in range(5):
+    print(t_y[i])
+
+for i in range(1, 6):
+    print(t_y[-i])
+
+
+train_model(t_x, t_y, embeddings, epochs=10)
 test_model(test_x, test_y, embeddings)

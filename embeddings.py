@@ -9,7 +9,7 @@ import uuid
 
 data_index = 0
 batch_size = 256
-embedding_size = 128
+embedding_size = 50
 skip_window = 4
 num_skips = 8
 num_sampled = 32
