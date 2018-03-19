@@ -50,7 +50,7 @@ def generate_batch(data):
     return batch, labels
 
 
-def train_embeddings(data, vocabulary_size, n_steps=400000):
+def train_embeddings(data, vocabulary_size, n_steps=2200000):
     graph = tf.Graph()
     run_id = uuid.uuid4().hex
     print('Creating graph ', run_id)

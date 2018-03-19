@@ -3,6 +3,7 @@ from tqdm import tqdm
 import numpy as np
 import pickle
 import os
+import csv
 import random
 import sys
 import re
@@ -13,7 +14,7 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from embeddings import train_embeddings, visualize_embeddings
-from model import train_model, test_model
+from model import train_model, test_model, predict
 from collections import Counter
 
 nltk.download('stopwords')
@@ -28,10 +29,13 @@ TRAIN_PATH = 'dataset/train.csv'
 TEST_PATH = 'dataset/test.csv'
 DICTIONARIES_PATH = 'pickles/dictionaries.pickle'
 DATA_X_PATH = 'pickles/data_x.pickle'
+TEST_DATA_X_PATH = 'pickles/test_data_x.pickle'
 EMBEDDINGS_PATH = 'pickles/embeddings.pickle'
 LEXICON_PATH = 'pickles/lexicon.pickle'
 EMBED_TRAIN_PATH = 'pickles/embed_train_x.pickle'
 EMBED_DATA_X_PATH = 'pickles/embedded_data_x.pickle'
+PREDICTION_PATH = 'pickles/prediction.pickle'
+SUBMISSION_PATH = 'submission.csv'
 
 
 # FUNCTIONS
@@ -210,29 +214,52 @@ else:
 # Embeddings visualisation
 visualize_embeddings(lexicon, embeddings)
 
-train_x, test_x, train_y, test_y = train_test_split(data_x, data_y,
-        test_size=.1)
+# train_x, test_x, train_y, test_y = train_test_split(data_x, data_y,
+  #       test_size=.1)
 
-t_x = collections.deque(maxlen=len(train_y))
-t_y = collections.deque(maxlen=len(train_y))
+# train_model(data_x, data_y, embeddings, n_epochs=42)
+# test_model(test_x, test_y, embeddings)
 
-for i, y in enumerate(train_y):
-    if np.any(y) or random.randrange(100) < 15:
-        t_x.appendleft(train_x[i])
-        t_y.appendleft(y)
-    # else:
-        # t_x.append(train_x[i])
-        # t_y.append(y)
+df = pd.read_csv(TEST_PATH)
 
-t_x = np.array(t_x)
-t_y = np.array(t_y)
-
-for i in range(5):
-    print(t_y[i])
-
-for i in range(1, 6):
-    print(t_y[-i])
+# TEST DATA X
+# If features file exists, load it
+# else, process new features and save it to the file
+if os.path.exists(TEST_DATA_X_PATH):
+    with open(TEST_DATA_X_PATH, 'rb') as f:
+        test_data_x = pickle.load(f)
+    print('test features loaded')
+else:
+    test_data_x = convert_sentences(df['comment_text'], dictionary)
+    with open(TEST_DATA_X_PATH, 'wb') as f:
+        pickle.dump(test_data_x, f)
+    print('test features processed')
 
 
-train_model(t_x, t_y, embeddings, epochs=10)
-test_model(test_x, test_y, embeddings)
+
+# PREDICTIONS
+# If predictions file exists, load it
+# else, create new predictions and save it to the file
+if os.path.exists(PREDICTION_PATH):
+    with open(PREDICTION_PATH, 'rb') as f:
+        predictions = pickle.load(f)
+    print('predictions loaded')
+else:
+    predictions = predict(test_data_x, embeddings)
+    with open(PREDICTION_PATH, 'wb') as f:
+        pickle.dump(predictions, f)
+    print('predictions created')
+
+ids = df['id']
+
+print(predictions[:5])
+del df
+
+with open(SUBMISSION_PATH, 'w') as f:
+    writer = csv.writer(f, delimiter=',')
+    writer.writerow(['id', 'toxic', 'severe_toxic', 'obscene', 'threat',
+                     'insult', 'identity_hate'])
+    for i, x in enumerate(ids):
+        row = [x]
+        row.extend(['{:.2f}'.format(arg) for arg in predictions[i]])
+        writer.writerow(row)

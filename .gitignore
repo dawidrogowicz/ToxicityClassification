@@ -1,7 +1,9 @@
 .idea
+submission.csv
 __pycache__/
 dataset/
 log/
 pickles/
 model/
 *.swp
+save/
